@@ -9,7 +9,7 @@ MODELS=(
 MODELS_DIR="../llama.cpp/models"
 LLAMA_CLI="../llama.cpp/build/bin/llama-cli"
 BENCHMARK_FILE="eu_ai_report.txt"
-OUTPUT_CSV="llama_cli_results.csv"
+OUTPUT_CSV="results/llama_cli_results.csv"
 
 # Initialize CSV
 echo "model,scenario,tps,ttft_s" > "$OUTPUT_CSV"

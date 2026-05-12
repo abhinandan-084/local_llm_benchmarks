@@ -8,7 +8,7 @@ MODELS=(
 )
 MODELS_DIR="../llama.cpp/models/"
 GEN_LEN=512 
-OUTPUT_CSV="llama_bench_results.csv"
+OUTPUT_CSV="results/llama_bench_results.csv"
 FIRST_RUN=true
 
 # Clear previous results

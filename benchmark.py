@@ -61,10 +61,10 @@ def main():
             if res: results.append(res)
 
     # Save to JSON for llama.cpp comparison later
-    with open("ollama_results.json", "w") as f:
+    with open("results/ollama_results.json", "w") as f:
         json.dump(results, f, indent=4)
     
-    print("\nOllama Benchmarks Complete. Results saved to ollama_results.json")
+    print("\nOllama Benchmarks Complete. Results saved to results/ollama_results.json")
 
 if __name__ == "__main__":
     main()
