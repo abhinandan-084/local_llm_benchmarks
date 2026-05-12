@@ -1,0 +1,10 @@
+model,scenario,tps,ttft_s
+Llama-3.2-3B.Q4_K_M.gguf,Simple_QKV,73.1,0.128928
+Llama-3.2-3B.Q4_K_M.gguf,Coding_Logic,71.5,0.40334
+Llama-3.2-3B.Q4_K_M.gguf,Long_Context,32.8,36.1917
+Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf,Simple_QKV,34.3,0.168443
+Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf,Coding_Logic,33.1,0.702525
+Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf,Long_Context,15.3,67.8427
+Mistral-Small-24B-Instruct-2501-Q2_K.gguf,Simple_QKV,8.6,8.15287
+Mistral-Small-24B-Instruct-2501-Q2_K.gguf,Coding_Logic,8.5,28.9266
+Mistral-Small-24B-Instruct-2501-Q2_K.gguf,Long_Context,6.6,255.202

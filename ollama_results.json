@@ -1,0 +1,56 @@
+[
+    {
+        "model": "llama3.2:3b",
+        "scenario": "Simple_QKV",
+        "tps": 69.54,
+        "ttft": 0.03
+    },
+    {
+        "model": "llama3.2:3b",
+        "scenario": "Coding_Logic",
+        "tps": 68.65,
+        "ttft": 0.051
+    },
+    {
+        "model": "llama3.2:3b",
+        "scenario": "Long_Context",
+        "tps": 38.94,
+        "ttft": 8.378
+    },
+    {
+        "model": "llama3.1:8b-instruct-q4_K_M",
+        "scenario": "Simple_QKV",
+        "tps": 32.56,
+        "ttft": 0.045
+    },
+    {
+        "model": "llama3.1:8b-instruct-q4_K_M",
+        "scenario": "Coding_Logic",
+        "tps": 32.99,
+        "ttft": 0.049
+    },
+    {
+        "model": "llama3.1:8b-instruct-q4_K_M",
+        "scenario": "Long_Context",
+        "tps": 7.67,
+        "ttft": 22.775
+    },
+    {
+        "model": "hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:Q2_K",
+        "scenario": "Simple_QKV",
+        "tps": 6.72,
+        "ttft": 1.243
+    },
+    {
+        "model": "hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:Q2_K",
+        "scenario": "Coding_Logic",
+        "tps": 6.67,
+        "ttft": 1.341
+    },
+    {
+        "model": "hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:Q2_K",
+        "scenario": "Long_Context",
+        "tps": 2.93,
+        "ttft": 66.904
+    }
+]
