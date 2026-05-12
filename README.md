@@ -10,7 +10,7 @@ This project documents how going "bare metal" with llama.cpp can turn aging hard
 
 ---
 
-## 📊 The Benchmark: Ollama vs. llama.cpp
+## The Benchmark: Ollama vs. llama.cpp
 
 I tested three models across three real-world scenarios:
 1. **Llama 3.2 3B**: Fully fits in GPU VRAM.
@@ -25,14 +25,14 @@ I tested three models across three real-world scenarios:
 | **Llama 3.1 8B** | Coding Logic | 15.4 | 30.9 | **+101%** |
 | **Mistral 24B** | Long Context | 2.6 | 2.8 | **+7%** |
 
-> **⚠️ Note on the 8B Model:** The +101% uplift in `llama-bench` represents the theoretical peak efficiency of CUDA kernels when perfectly saturated. In real-world `llama-cli` usage, the gain is more modest (~15-20%) but results in a significantly snappier and more responsive experience.
+> **Note on the 8B Model:** The +101% uplift in `llama-bench` represents the theoretical peak efficiency of CUDA kernels when perfectly saturated. In real-world `llama-cli` usage, the gain is more modest (~15-20%) but results in a significantly snappier and more responsive experience.
 
 ### **The "TTFT" Mystery**
 In my results, Ollama sometimes claims a near-instant **Time to First Token (TTFT)**. **Don't be fooled.** Ollama's logs often measure the time to the *start* of the server response. `llama-cli` gives you the raw reality of the **Prompt Processing (Prefill)** stage. When feeding 16k context into a 6GB GPU, that "real" wait time is where the hardware is actually doing the heavy lifting.
 
 ---
 
-## 🛠️ **Installation & Setup**
+## **Installation & Setup**
 
 ### **1. Ollama (The Easy Way)**
 Perfect for quick testing and general use.
