@@ -1,16 +1,14 @@
-# Beyond Ollama: Squeezing a 24B Model into a 6GB "Workhorse"
+# **Beyond Ollama: Squeezing a 24B Model into a 6GB "Workhorse"**
 
 This repository contains benchmarking scripts, raw data, and optimization configurations comparing Ollama vs. llama.cpp (llama-cli).
 
-Most AI benchmarks you see online are run on H100s or dual 4090 builds. This isn't one of them.
-
-I’m running these tests on an old gaming laptop equipped with an RTX 3050 6GB. For a long time, Ollama was my go-to—the "Apple of Local LLMs." But as I started pushing for larger models (like Mistral 24B), I hit the "Ollama Box." I felt restricted by the lack of granular control over VRAM offloading and the inability to tweak parameters for limited hardware.
+I'm running these tests on an old gaming laptop equipped with an RTX 3050 6GB. For a long time, Ollama was my go-to—the "Apple of Local LLMs." But as I started pushing for larger models (like Mistral 24B), I hit the "Ollama Box." I felt restricted by the lack of granular control over VRAM offloading and the inability to tweak parameters for limited hardware.
 
 This project documents how going "bare metal" with llama.cpp can turn aging hardware into a capable AI workhorse.
 
 ---
 
-## The Benchmark: Ollama vs. llama.cpp
+# **Base Benchmark: Ollama vs. llama.cpp**
 
 I tested three models across three real-world scenarios:
 1. **Llama 3.2 3B**: Fully fits in GPU VRAM.
@@ -29,6 +27,89 @@ I tested three models across three real-world scenarios:
 
 ### **The "TTFT" Mystery**
 In my results, Ollama sometimes claims a near-instant **Time to First Token (TTFT)**. **Don't be fooled.** Ollama's logs often measure the time to the *start* of the server response. `llama-cli` gives you the raw reality of the **Prompt Processing (Prefill)** stage. When feeding 16k context into a 6GB GPU, that "real" wait time is where the hardware is actually doing the heavy lifting.
+
+---
+
+# **Advanced Benchmarks : Optimising LLama.cpp Performance**
+
+Proving Llama.cpp is faster was the first step. The real engineering happens when we isolate specific hardware bottlenecks. For the advanced profiling, use the following `llama-bench` commands.
+
+### **KV Cache Quantization Trade-offs (`-ctk` / `-ctv`)**
+When processing long contexts (like 16k tokens), the Key-Value (KV) cache balloons rapidly. On an 8B model, a 16k uncompressed cache takes up ~2.15 GB of VRAM. If this spills over the 6GB limit, the system crashes. We can compress this cache dynamically to save VRAM.
+
+**The Test:** Testing for cache precision from 16-bit float down to 4-bit quantized.
+
+```bash
+./build/bin/llama-bench \
+  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
+  -ngl 24 \
+  -fa 1 \
+  -p 4096 \
+  -n 128 \
+  -ctk f16,q8_0,q4_0 \
+  -ctv f16,q8_0,q4_0 \
+  -o csv > kv_cache_tradeoff.csv
+```
+
+**Finding:** Mixed precision (e.g., f16 Keys and q4_0 Values) destroys tensor core efficiency. However, symmetric q4_0/q4_0 quantization reduces VRAM footprint by 75% while actually increasing decode speed due to reduced memory-bus congestion.
+
+### **Batch & Micro-Batch Ingestion (`-b` vs `-ub`)**
+When you send a prompt to an AI, the GPU does two completely different types of work. 
+1. **Prompt Prefill:** The GPU takes the entire prompt and processes it all at once. Because it knows all the words in the prompt simultaneously, it can use all its thousands of cores to do math in parallel. The bottleneck here is Compute-bound. Because the GPU knows the entire text, it is working at its maximum "thinking" speed (TFLOPS). 
+2. **Token Generation:** Once the prompt is read, the model generates the answer one token at a time. To pick the next word, it has to look back at everything it just wrote. The bottleneck thus becomes memory-bound. Even though picking one word isn't "hard", the GPU has to load the entire multi-gigabyte model from its memory (VRAM) into its processor just to calculate that one single word. The model has to do this over and over. The limit is then how fast data can move from storage to the the processor
+
+By adjusting batch sizes, we can tune how the GPU ingests massive blocks of text to prevent the "Warmup Spike" (where transient memory allocations crash the GPU driver).
+
+**The Test:** Altering total batch size vs. physical micro-batch chunks.
+
+```bash
+./build/bin/llama-bench \
+  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
+  -ngl 24 \
+  -fa 1 \
+  -p 1024 \
+  -n 128 \
+  -b 512,2048 \
+  -ub 128,512 \
+  -o csv > batch_size_evaluation.csv
+```
+
+**Finding:** Increasing -ub from 128 to 512 massively increases prefill speed (up to +85%), but it requires more available VRAM padding to prevent an OOM crash. Decode speed remains unaffected.
+
+### **The GPU Layer Offloading Sweep (`-ngl`)**
+Offloading splits the model's layers between a faster GPU and a slower CPU. Because the model processes information in its layers sequentially, data must constantly jump between these two components to complete a single thought. This transfer happens across the PCIe bus, which is significantly slower than the GPU's internal memory. Every time the data has to use this, it creates a "**latency penalty**" that forces the hardware to pause and wait. Ultimately, the time saved by the GPU's fast math is often canceled out by the time wasted moving data back and forth.
+
+**The Test:** Testing from 0% GPU (pure CPU) to 100% GPU offload.
+
+```bash
+./build/bin/llama-bench \
+  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
+  -fa 1 \
+  -p 512 \
+  -n 128 \
+  -ngl 0,8,16,24,32 \
+  -o csv > ngl_test_8b.csv
+```
+
+**Finding:** Scaling is non-linear. Offloading just 4 or 8 layers actually slows down token generation compared to pure CPU because the PCIe transfer penalty outweighs the compute gain. Performance only spikes upward once we offload the majority of the model (16+ layers).
+
+### **CPU Thread Topology Optimization (`-t`)**
+When a 24B model doesn't fit in 6GB of VRAM, the CPU handles the rest. On an asymmetric processor, sometimes using all available threads often backfires because the slower Efficiency cores (E-cores) create a bottleneck, forcing the fast Performance cores (P-cores) to wait for them to finish.
+
+**The Test:** Testing thread counts to find the asymmetric inflection point for Mistral 24B
+
+```bash
+./build/bin/llama-bench \
+  -m models/Mistral-Small-24B-Instruct-2501-Q2_K.gguf \
+  -ngl 12 \
+  -fa 1 \
+  -p 512 \
+  -n 128 \
+  -t 4,6,8,10,12 \
+  -o csv > thread_optimization.csv
+```
+
+**Finding:** Prefill speed peaks exactly at 10 threads (matching the total physical core count). Pushing to 12 threads forces hyper-threading overhead and E-core context switching, degrading matrix multiplication speeds.
 
 ---
 
