@@ -25,9 +25,6 @@ I tested three models across three real-world scenarios:
 
 > **Note on the 8B Model:** The +101% uplift in `llama-bench` represents the theoretical peak efficiency of CUDA kernels when perfectly saturated. In real-world `llama-cli` usage, the gain is more modest (~15-20%) but results in a significantly snappier and more responsive experience.
 
-### **The "TTFT" Mystery**
-In my results, Ollama sometimes claims a near-instant **Time to First Token (TTFT)**. **Don't be fooled.** Ollama's logs often measure the time to the *start* of the server response. `llama-cli` gives you the raw reality of the **Prompt Processing (Prefill)** stage. When feeding 16k context into a 6GB GPU, that "real" wait time is where the hardware is actually doing the heavy lifting.
-
 ---
 
 # **Advanced Benchmarks : Optimising LLama.cpp Performance**
