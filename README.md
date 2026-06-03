@@ -46,17 +46,6 @@ Each user request to a local LLM passes through two hardware-bound phases. Knowi
 
   For Llama 3.1 8B (Q4_K_M) at a 16k context in FP16, the cache alone is ~2.15 GB on top of ~4.50 GB of weights — ~6.65 GB total, which is the wall a 6GB card hits.
 
-The repo's two execution paths share the same model files and prompts:
-
-```text
-local_llm_benchmarks/
-├── scripts/         # bash drivers: build llama.cpp, run sweeps, collect raw output
-├── benchmarks/      # per-scenario configs (models × prompts × flags)
-├── results/         # raw CSVs from llama-bench and the engine comparison runs
-├── analysis/        # Python: parse results, compute uplift, plot charts
-└── prompts/         # the 128 / 512 / 16384-token prompt fixtures
-```
-
 ## Installation
 
 Requires an NVIDIA GPU with a working CUDA toolkit, Python 3.10+, and a C/C++ build toolchain.
@@ -95,19 +84,10 @@ Got everything installed? Reproduce the headline result and the charts above in 
 
 ```bash
 # 1. Run the engine comparison (all models × scenarios) → results/engine_comparison.csv
-./scripts/run_engine_comparison.sh
+python benchmark.py
 
 # 2. Run the four low-level tuning sweeps with llama-bench
-./scripts/run_all_sweeps.sh
-
-# 3. Parse the raw CSVs into summary tables + regenerate the PNG charts
-python analysis/summarize.py --plots
-```
-
-Outputs land in `results/` (raw CSVs and summary tables) and `assets/` (charts). To smoke-test a single config without the full matrix:
-
-```bash
-./scripts/run_engine_comparison.sh --models llama3.1:8b --scenario long_context
+./llama_bench.sh
 ```
 
 ## Usage Examples
@@ -115,7 +95,7 @@ Outputs land in `results/` (raw CSVs and summary tables) and `assets/` (charts).
 Run the full engine comparison across all models and scenarios:
 
 ```bash
-./scripts/run_engine_comparison.sh --output results/engine_comparison.csv
+./llama_cli.sh
 ```
 
 Reproduce a single tuning sweep with `llama-bench`. **CPU threads** — match `-t` to *physical* cores, not logical threads:
@@ -240,20 +220,9 @@ Benchmark data from other hardware is the most valuable contribution this repo c
 
 1. **Fork and branch.** Create a branch named for your rig, e.g. `results/rtx4060-8gb`.
 2. **Run the suite unmodified.** Use the committed prompts, models, and flags so numbers stay comparable. Don't change `prompts/` or sweep ranges in a results PR.
-3. **Record your environment.** Add a `results/<your-rig>/env.md` capturing GPU, VRAM, CPU (physical P/E core counts), CUDA version, driver, and the `llama.cpp` commit you built. The `scripts/collect_env.sh` helper dumps most of this for you.
-4. **Commit the raw CSVs**, not just summaries — `analysis/summarize.py` regenerates tables and charts from them.
+3. **Record your environment.** Add a `results/<your-rig>/env.md` capturing GPU, VRAM, CPU (physical P/E core counts), CUDA version, driver, and the `llama.cpp` commit you built.
+4. **Commit the raw CSVs**, not just summaries.
 5. **Open a PR** describing the hardware and anything notable (OOM thresholds, where the offload cliff landed for you).
-
-For code changes (new sweeps, analysis, or engine support):
-
-- Keep bash drivers POSIX-friendly and `set -euo pipefail`.
-- Format Python with `black` and lint with `ruff` before pushing:
-
-  ```bash
-  black analysis/ && ruff check analysis/
-  ```
-
-- One logical change per PR. New tuning dimensions should ship with a sweep script, sample output, and a results-table entry.
 
 Found a methodology issue or a flag that skews comparability? Open an issue first so we can discuss before the data diverges.
 
