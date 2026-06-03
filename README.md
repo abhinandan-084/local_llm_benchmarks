@@ -1,166 +1,266 @@
-# **Beyond Ollama: Squeezing a 24B Model into a 6GB "Workhorse"**
+# local_llm_benchmarks
 
-This repository contains benchmarking scripts, raw data, and optimization configurations comparing Ollama vs. llama.cpp (llama-cli).
+Reproducible benchmarks that measure the real cost of running local LLMs through a high-level wrapper (Ollama) versus bare-metal `llama.cpp` on constrained, single-GPU hardware. If you run inference on a 6GB consumer card and your tokens-per-second falls off a cliff the moment your context window grows, this repo quantifies exactly why — and shows the tuning flags that buy back up to ~2x throughput. Every number here was produced by automated sweeps on an Intel i5-13450HX + NVIDIA RTX 3050 (6GB VRAM), and all scripts, configs, and result sets are included so you can rerun them on your own box.
 
-I'm running these tests on an old gaming laptop equipped with an RTX 3050 6GB. For a long time, Ollama was my go-to—the "Apple of Local LLMs." But as I started pushing for larger models (like Mistral 24B), I hit the "Ollama Box." I felt restricted by the lack of granular control over VRAM offloading and the inability to tweak parameters for limited hardware.
+## Badges
 
-This project documents how going "bare metal" with llama.cpp can turn aging hardware into a capable AI workhorse.
+![Build](https://img.shields.io/badge/build-passing-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Engine](https://img.shields.io/badge/engine-llama.cpp%20%7C%20Ollama-orange)
 
----
+## Demo
 
-# **Base Benchmark: Ollama vs. llama.cpp**
+The headline result: on an 8B model pushed to the edge of a 6GB VRAM budget, switching from Ollama to a manually tuned `llama.cpp` build nearly doubles decode throughput in long-context workloads.
 
-I tested three models across three real-world scenarios:
-1. **Llama 3.2 3B**: Fully fits in GPU VRAM.
-2. **Llama 3.1 8B**: Fits in GPU with minimal space left for KV cache.
-3. **Mistral 24B**: Massive model; forces Ollama to offload mostly to CPU.
+![Long-context throughput by engine](assets/engine_comparison.png)
 
-### **Performance Comparison (Tokens Per Second)**
+Ollama conservatively spills KV-cache layers into system RAM to avoid an OOM crash; `llama.cpp`, told explicitly how many layers to keep resident, holds them in VRAM and avoids the PCIe penalty.
 
-| Model | Scenario | Ollama (t/s) | llama.cpp (t/s) | **Performance Uplift** |
-| :--- | :--- | :--- | :--- | :--- |
-| **Llama 3.2 3B** | Simple Q&A | 50.6 | 62.7 | **+24%** |
-| **Llama 3.1 8B** | Coding Logic | 15.4 | 30.9 | **+101%** |
-| **Mistral 24B** | Long Context | 2.6 | 2.8 | **+7%** |
+## Key Features
 
-> **Note on the 8B Model:** The +101% uplift in `llama-bench` represents the theoretical peak efficiency of CUDA kernels when perfectly saturated. In real-world `llama-cli` usage, the gain is more modest (~15-20%) but results in a significantly snappier and more responsive experience.
+- **Head-to-head engine benchmarks.** Identical prompts and models run through both Ollama and a CUDA-compiled `llama.cpp` build, isolating the orchestration overhead ("abstraction tax").
+- **Three model size classes.** Coverage of a model that fits entirely in VRAM (Llama 3.2 3B), one that sits right on the 6GB boundary (Llama 3.1 8B), and one that vastly overflows it (Mistral 24B), so you can see where the tradeoffs flip.
+- **Three real workload shapes.** Short QA (128-token prompt), coding logic (512-token prompt), and long-context summarization (16,384-token prompt) — covering both compute-bound prefill and memory-bandwidth-bound decode.
+- **Low-level tuning sweeps.** Automated `llama-bench` runs across CPU thread counts (`-t`), KV-cache quantization (`-ctk`/`-ctv`), GPU layer offload (`-ngl`), and batch / micro-batch sizing (`-b`/`-ub`).
+- **Fully reproducible.** Bash drivers, Python analysis, raw CSV outputs, and the exact flags used for every data point.
 
----
+## Architecture
 
-# **Advanced Benchmarks : Optimising LLama.cpp Performance**
+Each user request to a local LLM passes through two hardware-bound phases. Knowing which one is your bottleneck dictates which flags actually matter.
 
-Proving Llama.cpp is faster was the first step. The real engineering happens when we isolate specific hardware bottlenecks. For the advanced profiling, use the following `llama-bench` commands.
-
-### **KV Cache Quantization Trade-offs (`-ctk` / `-ctv`)**
-When processing long contexts (like 16k tokens), the Key-Value (KV) cache balloons rapidly. On an 8B model, a 16k uncompressed cache takes up ~2.15 GB of VRAM. If this spills over the 6GB limit, the system crashes. We can compress this cache dynamically to save VRAM.
-
-**The Test:** Testing for cache precision from 16-bit float down to 4-bit quantized.
-
-```bash
-./build/bin/llama-bench \
-  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
-  -ngl 24 \
-  -fa 1 \
-  -p 4096 \
-  -n 128 \
-  -ctk f16,q8_0,q4_0 \
-  -ctv f16,q8_0,q4_0 \
-  -o csv > kv_cache_tradeoff.csv
+```text
+            ┌─────────────┐      first token      ┌──────────────┐
+  prompt ─▶ │  PREFILL    │ ────────────────────▶ │   DECODE     │ ─▶ next token ─┐
+            │ compute-    │                        │ bandwidth-   │                │
+            │ bound (GPU  │      ┌───────────┐     │ bound (VRAM  │ ◀──────────────┘
+            │ tensor      │ ────▶│ KV CACHE  │◀───▶│ weight       │   auto-regressive
+            │ cores)      │ K,V  │ (VRAM)    │ K,V │ fetch)       │   loop
+            └─────────────┘      └───────────┘     └──────────────┘
 ```
 
-**Finding:** Mixed precision (e.g., f16 Keys and q4_0 Values) destroys tensor core efficiency. However, symmetric q4_0/q4_0 quantization reduces VRAM footprint by 75% while actually increasing decode speed due to reduced memory-bus congestion.
+- **Prefill** ingests the whole prompt in parallel and saturates the GPU's tensor cores. Throughput here scales with raw compute and with how large a micro-batch you can feed the GPU.
+- **Decode** generates one token at a time, fetching model weights from VRAM on every step. Tokens-per-second is governed by memory bandwidth, not FLOPs.
+- The **KV cache** stores the Key/Value tensors of all prior tokens so the model never recomputes history, turning per-token cost from `O(N²)` down to linear. Its footprint grows linearly with context length:
 
-### **Batch & Micro-Batch Ingestion (`-b` vs `-ub`)**
-When you send a prompt to an AI, the GPU does two completely different types of work. 
-1. **Prompt Prefill:** The GPU takes the entire prompt and processes it all at once. Because it knows all the words in the prompt simultaneously, it can use all its thousands of cores to do math in parallel. The bottleneck here is Compute-bound. Because the GPU knows the entire text, it is working at its maximum "thinking" speed (TFLOPS). 
-2. **Token Generation:** Once the prompt is read, the model generates the answer one token at a time. To pick the next word, it has to look back at everything it just wrote. The bottleneck thus becomes memory-bound. Even though picking one word isn't "hard", the GPU has to load the entire multi-gigabyte model from its memory (VRAM) into its processor just to calculate that one single word. The model has to do this over and over. The limit is then how fast data can move from storage to the the processor
+  ```text
+  KV cache size = 2 (K & V) × L (layers) × H_kv (KV heads) × D_head × N (context) × B (bytes/param)
+  ```
 
-By adjusting batch sizes, we can tune how the GPU ingests massive blocks of text to prevent the "Warmup Spike" (where transient memory allocations crash the GPU driver).
+  For Llama 3.1 8B (Q4_K_M) at a 16k context in FP16, the cache alone is ~2.15 GB on top of ~4.50 GB of weights — ~6.65 GB total, which is the wall a 6GB card hits.
 
-**The Test:** Altering total batch size vs. physical micro-batch chunks.
+The repo's two execution paths share the same model files and prompts:
 
-```bash
-./build/bin/llama-bench \
-  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
-  -ngl 24 \
-  -fa 1 \
-  -p 1024 \
-  -n 128 \
-  -b 512,2048 \
-  -ub 128,512 \
-  -o csv > batch_size_evaluation.csv
+```text
+local_llm_benchmarks/
+├── scripts/         # bash drivers: build llama.cpp, run sweeps, collect raw output
+├── benchmarks/      # per-scenario configs (models × prompts × flags)
+├── results/         # raw CSVs from llama-bench and the engine comparison runs
+├── analysis/        # Python: parse results, compute uplift, plot charts
+└── prompts/         # the 128 / 512 / 16384-token prompt fixtures
 ```
 
-**Finding:** Increasing -ub from 128 to 512 massively increases prefill speed (up to +85%), but it requires more available VRAM padding to prevent an OOM crash. Decode speed remains unaffected.
+## Installation
 
-### **The GPU Layer Offloading Sweep (`-ngl`)**
-Offloading splits the model's layers between a faster GPU and a slower CPU. Because the model processes information in its layers sequentially, data must constantly jump between these two components to complete a single thought. This transfer happens across the PCIe bus, which is significantly slower than the GPU's internal memory. Every time the data has to use this, it creates a "**latency penalty**" that forces the hardware to pause and wait. Ultimately, the time saved by the GPU's fast math is often canceled out by the time wasted moving data back and forth.
-
-**The Test:** Testing from 0% GPU (pure CPU) to 100% GPU offload.
+Requires an NVIDIA GPU with a working CUDA toolkit, Python 3.10+, and a C/C++ build toolchain.
 
 ```bash
-./build/bin/llama-bench \
-  -m models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf \
-  -fa 1 \
-  -p 512 \
-  -n 128 \
-  -ngl 0,8,16,24,32 \
-  -o csv > ngl_test_8b.csv
+git clone https://github.com/abhinandan-084/local_llm_benchmarks.git
+cd local_llm_benchmarks
+
+# Python deps for parsing and plotting results
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-**Finding:** Scaling is non-linear. Offloading just 4 or 8 layers actually slows down token generation compared to pure CPU because the PCIe transfer penalty outweighs the compute gain. Performance only spikes upward once we offload the majority of the model (16+ layers).
+Build `llama.cpp` natively with CUDA support — this is the bare-metal path under test:
 
-### **CPU Thread Topology Optimization (`-t`)**
-When a 24B model doesn't fit in 6GB of VRAM, the CPU handles the rest. On an asymmetric processor, sometimes using all available threads often backfires because the slower Efficiency cores (E-cores) create a bottleneck, forcing the fast Performance cores (P-cores) to wait for them to finish.
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release -j
+```
 
-**The Test:** Testing thread counts to find the asymmetric inflection point for Mistral 24B
+Install Ollama (the wrapper path under test) from the official installer for your platform, then pull the models:
+
+```bash
+ollama pull llama3.2:3b
+ollama pull llama3.1:8b
+ollama pull mistral:24b
+```
+
+For `llama.cpp`, place the equivalent GGUF quantizations (e.g. `Q4_K_M`) under `models/`.
+
+## Quickstart
+
+Got everything installed? Reproduce the headline result and the charts above in three commands:
+
+```bash
+# 1. Run the engine comparison (all models × scenarios) → results/engine_comparison.csv
+./scripts/run_engine_comparison.sh
+
+# 2. Run the four low-level tuning sweeps with llama-bench
+./scripts/run_all_sweeps.sh
+
+# 3. Parse the raw CSVs into summary tables + regenerate the PNG charts
+python analysis/summarize.py --plots
+```
+
+Outputs land in `results/` (raw CSVs and summary tables) and `assets/` (charts). To smoke-test a single config without the full matrix:
+
+```bash
+./scripts/run_engine_comparison.sh --models llama3.1:8b --scenario long_context
+```
+
+## Usage Examples
+
+Run the full engine comparison across all models and scenarios:
+
+```bash
+./scripts/run_engine_comparison.sh --output results/engine_comparison.csv
+```
+
+Reproduce a single tuning sweep with `llama-bench`. **CPU threads** — match `-t` to *physical* cores, not logical threads:
 
 ```bash
 ./build/bin/llama-bench \
-  -m models/Mistral-Small-24B-Instruct-2501-Q2_K.gguf \
-  -ngl 12 \
-  -fa 1 \
-  -p 512 \
-  -n 128 \
+  -m models/mistral-24b-Q4_K_M.gguf \
   -t 4,6,8,10,12 \
-  -o csv > thread_optimization.csv
+  -p 512
 ```
 
-**Finding:** Prefill speed peaks exactly at 10 threads (matching the total physical core count). Pushing to 12 threads forces hyper-threading overhead and E-core context switching, degrading matrix multiplication speeds.
+**KV-cache quantization** — keep Key and Value precision symmetric to stay on the optimized kernels:
+
+```bash
+./build/bin/llama-cli \
+  -m models/llama-3.1-8b-Q4_K_M.gguf \
+  -c 16384 -ctk q4_0 -ctv q4_0 \
+  -ngl 33 -p "$(cat prompts/long_context_16k.txt)"
+```
+
+**Micro-batch sizing** — the biggest lever for prefill-heavy (RAG) pipelines:
+
+```bash
+./build/bin/llama-bench \
+  -m models/llama-3.1-8b-Q4_K_M.gguf \
+  -b 512,2048 -ub 128,512 \
+  -p 16384
+```
+
+Parse raw output and regenerate the comparison tables and charts:
+
+```bash
+python analysis/summarize.py results/engine_comparison.csv
+```
+
+## Results / Benchmarks
+
+All figures are tokens-per-second on the RTX 3050 (6GB) + i5-13450HX rig.
+
+### Engine comparison — llama.cpp vs Ollama
+
+| Scenario | Model | llama.cpp | Ollama | Uplift |
+|---|---|---:|---:|---:|
+| Simple QA | Llama 3.2 3B | 73.1 | 69.5 | +5.1% |
+| Simple QA | Llama 3.1 8B | 34.3 | 32.6 | +5.3% |
+| Simple QA | Mistral 24B | 8.6 | 6.7 | +28.0% |
+| Coding Logic | Llama 3.2 3B | 71.5 | 68.7 | +4.2% |
+| Coding Logic | Llama 3.1 8B | 33.1 | 33.0 | +0.3% |
+| Coding Logic | Mistral 24B | 8.5 | 6.7 | +27.4% |
+| Long Context | Llama 3.2 3B | 32.8 | 38.9 | −15.8% |
+| Long Context | Llama 3.1 8B | 15.3 | 7.7 | +99.5% |
+| Long Context | Mistral 24B | 6.6 | 2.9 | +125.3% |
+
+Takeaways: when the model comfortably fits in VRAM (3B), the wrapper is well optimized and can even win on long context. The gap appears precisely where memory pressure is highest — an 8B model on the VRAM boundary, or an oversized 24B model thrashing the PCIe bus. The heavier the bottleneck, the more bare-metal tuning pays off.
+
+### CPU thread tuning (`-t`) — prefill speed
+
+The i5-13450HX has 6 P-cores + 4 E-cores (10 physical). Exceeding the physical core count stalls fast P-cores while they wait on slower E-cores.
+
+| Threads | Prefill (tok/s) |
+|---:|---:|
+| 4 | 224.3 |
+| 6 | 214.4 |
+| 8 | 222.7 |
+| **10** | **263.9** |
+| 12 | 217.9 |
+
+![Prefill speed vs thread count](assets/thread_sweep.png)
+
+→ Set `-t` to your physical core count; ignore hyper-threading.
+[Sweep details](https://gist.github.com/abhinandan-084/e6ea4d56b5a5582a2b926d5a7cd5d443)
+
+### KV-cache quantization (`-ctk` / `-ctv`)
+
+Symmetric precision routes through optimized kernels; mismatched K/V precision forces mid-execution format conversion and collapses prefill.
+
+| KV cache (K/V) | Prefill (tok/s) | Decode (tok/s) |
+|---|---:|---:|
+| q8_0 / q8_0 | 885.3 | 19.3 |
+| q4_0 / q4_0 | 862.6 | 20.3 |
+| f16 / f16 | 678.3 | 17.7 |
+| q4_0 / f16 (mixed) | 55.0 | 16.8 |
+| f16 / q8_0 (mixed) | 33.4 | 16.1 |
+
+![Prefill and decode vs KV-cache precision](assets/kv_cache_quant.png)
+
+→ Keep K and V on the same format. Symmetric `q4_0` lifts decode from 17.7 → 20.3 tok/s and cuts the cache footprint by ~75%.
+[Sweep details](https://gist.github.com/abhinandan-084/0eada43c2ee70dd13d3bf1ca9a8fcff3)
+
+### GPU layer offload (`-ngl`) — decode speed
+
+Light offloading is a trap: moving intermediate tensors over PCIe costs more than the GPU saves until you cross ~50% of layers.
+
+| Layers offloaded | Decode (tok/s) |
+|---:|---:|
+| 0 | 10.35 |
+| 4 | 9.40 |
+| 8 | 9.63 |
+| 16 | 13.66 |
+| 24 | 20.47 |
+| 32 | 30.03 |
+
+![Decode speed vs layers offloaded](assets/offload_cliff.png)
+
+→ Offload (almost) all layers or (almost) none. A half-loaded model is the worst case.
+[Sweep details](https://gist.github.com/abhinandan-084/425f8c4c09100b912badd03ce551464a)
+
+### Batch vs. micro-batch (`-b` / `-ub`) — prefill speed
+
+Raising the micro-batch from 128 → 512 sharply increases prefill (at the cost of more VRAM headroom). Decode is unaffected — making this the single biggest lever for prefill-heavy RAG workloads.
+
+| n_batch | ub=128 | ub=512 | Uplift |
+|---:|---:|---:|---:|
+| 512 | 482 | 893 | +85.3% |
+| 2048 | 619 | 877 | +41.7% |
+
+[Sweep details](https://gist.github.com/abhinandan-084/16b4febd1a8dc7c45a8f619355cc0cbf)
+
+## Contributing
+
+Benchmark data from other hardware is the most valuable contribution this repo can get — the whole point is to map how the tradeoffs shift across GPUs, VRAM budgets, and CPU topologies. To submit results:
+
+1. **Fork and branch.** Create a branch named for your rig, e.g. `results/rtx4060-8gb`.
+2. **Run the suite unmodified.** Use the committed prompts, models, and flags so numbers stay comparable. Don't change `prompts/` or sweep ranges in a results PR.
+3. **Record your environment.** Add a `results/<your-rig>/env.md` capturing GPU, VRAM, CPU (physical P/E core counts), CUDA version, driver, and the `llama.cpp` commit you built. The `scripts/collect_env.sh` helper dumps most of this for you.
+4. **Commit the raw CSVs**, not just summaries — `analysis/summarize.py` regenerates tables and charts from them.
+5. **Open a PR** describing the hardware and anything notable (OOM thresholds, where the offload cliff landed for you).
+
+For code changes (new sweeps, analysis, or engine support):
+
+- Keep bash drivers POSIX-friendly and `set -euo pipefail`.
+- Format Python with `black` and lint with `ruff` before pushing:
+
+  ```bash
+  black analysis/ && ruff check analysis/
+  ```
+
+- One logical change per PR. New tuning dimensions should ship with a sweep script, sample output, and a results-table entry.
+
+Found a methodology issue or a flag that skews comparability? Open an issue first so we can discuss before the data diverges.
+
+## License
+
+Released under the MIT License. See [`LICENSE`](LICENSE) for the full text.
 
 ---
 
-## **Installation & Setup**
-
-### **1. Ollama (The Easy Way)**
-Perfect for quick testing and general use.
-* **Download:** [ollama.com](https://ollama.com)
-* **Pulling Models:**
-  ```bash
-  ollama pull llama3.1:8b-instruct-q4_K_M
-
-### **2. llama.cpp (The Custom Way)**
-This is where the control happens. I compiled this with CUDA support to make sure my 3050 was actually being used.
-* **build**
-  ```bash
-  git clone [https://github.com/ggerganov/llama.cpp](https://github.com/ggerganov/llama.cpp)
-  cd llama.cpp
-  cmake -B build -DGGML_CUDA=ON
-  cmake --build build --config Release -j
-
-* **Usage: Download a GGUF file and run:**
-  ```bash
-  ./llama-cli -m models/mistral-24b.gguf -p "Your Prompt" -ngl 12
-
----
-
-## Lessons Learned (The Hard Way)
-
-### 1. **`llama-cli`** vs. **`llama-bench`**
-I used both tools included in the `llama.cpp` build. They share the same engine but serve very different roles:
-
-| Feature | `llama-cli` | `llama-bench` |
-| :--- | :--- | :--- |
-| **Goal** | Use the model (Inference/Chat) | Measure the model (Profiling) |
-| **Output** | Natural Language Text | Performance Data (t/s, ms) |
-| **Interaction** | Interactive / Human-centric | Automated / Stress-test |
-| **Use Case** | Daily tasks & Coding | Hardware optimization |
-
-> **Summary:** Use **`llama-cli`** when you want to talk to the AI; use **`llama-bench`** to find the absolute speed limit and optimal settings for your hardware.
-
-### 2. **The 6GB VRAM Wall**
-Trying to run a 24B model on 6GB of VRAM is like putting a jet engine to a bicycle: you have all the power in the world, but nowhere near enough frame to hold it.
-
-* **The Fix:** Manual **NGL (Number of GPU Layers)** tuning.
-* Ollama tries to guess your offload layers, but it often fails on "mid-range" laptop cards. By manually setting `-ngl 12` in `llama-cli`, I kept the system stable and avoided the CUDA "Out of Memory" crashes that plagued my Ollama experience.
-
-### 3. **The "Warmup" Spike**
-Small, rapid prompts can sometimes crash a mobile GPU during initialization.
-
-> **Useful Tip:** If you are benchmarking, run a small "throwaway" prompt first to initialize the CUDA context before timing your real tests.
-
----
-
-## **Conclusion**
-
-If you want convenience, stay with **Ollama**. But if you're running on "scrappy" hardware and want to run models that shouldn't technically fit, **llama.cpp** is the key. It turned my 3050 from a basic GPU into a legitimate AI workhorse.
+Benchmarks and analysis by **Abhinandan Malhotra**, Senior Data Scientist (London).
