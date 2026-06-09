@@ -1,0 +1,6 @@
+# Pinned to the versions resolved in uv.lock so the pip path matches `uv sync`.
+# Regenerate with: uv export --no-hashes --format requirements-txt > requirements.txt
+pandas==3.0.2
+matplotlib==3.10.9
+seaborn==0.13.2
+requests==2.33.1
