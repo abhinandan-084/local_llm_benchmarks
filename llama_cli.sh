@@ -22,11 +22,11 @@ for MODEL_NAME in "${MODELS[@]}"; do
     BASE_NGL=80
     [[ "$MODEL_NAME" == *"Mistral"* || "$MODEL_NAME" == *"24B"* ]] && BASE_NGL=24
 
-    for S_TYPE in "Simple_QKV" "Coding_Logic" "Long_Context"; do
+    for S_TYPE in "Simple_QA" "Coding_Logic" "Long_Context"; do
         echo "Running $MODEL_NAME | $S_TYPE..."
 
         # Logic for Scenario Params
-        if [ "$S_TYPE" == "Simple_QKV" ]; then
+        if [ "$S_TYPE" == "Simple_QA" ]; then
             P_TOKENS=128   # Estimated prompt tokens
             ARGS=(-p "Explain the difference and relation between QKV and KV Cache." -c 2048)
         elif [ "$S_TYPE" == "Coding_Logic" ]; then

@@ -32,8 +32,8 @@ for MODEL_NAME in "${MODELS[@]}"; do
     fi
     # -------------------------
 
-    # SCENARIO 1: Simple QKV
-    echo "Benchmarking $MODEL_NAME | Simple QKV (NGL: $CURRENT_NGL)"
+    # SCENARIO 1: Simple QA
+    echo "Benchmarking $MODEL_NAME | Simple QA (NGL: $CURRENT_NGL)"
     RAW=$(../llama.cpp/build/bin/llama-bench --output csv -m "$MODEL_PATH" -p 128 -n $GEN_LEN -d 2048 -ngl $CURRENT_NGL -fa 1)
 
     if [ "$FIRST_RUN" = true ]; then
@@ -41,7 +41,7 @@ for MODEL_NAME in "${MODELS[@]}"; do
         echo "$(echo "$RAW" | head -n 1),scenario" > "$OUTPUT_CSV"
         FIRST_RUN=false
     fi
-    echo "$RAW" | tail -n +2 | sed "s/$/,Simple_QKV/" >> "$OUTPUT_CSV"
+    echo "$RAW" | tail -n +2 | sed "s/$/,Simple_QA/" >> "$OUTPUT_CSV"
 
     # SCENARIO 2: Coding Logic
     echo "Benchmarking $MODEL_NAME | Coding Logic (NGL: $CURRENT_NGL)"

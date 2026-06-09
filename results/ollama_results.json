@@ -1,7 +1,7 @@
 [
     {
         "model": "llama3.2:3b",
-        "scenario": "Simple_QKV",
+        "scenario": "Simple_QA",
         "tps": 69.54,
         "ttft": 0.03
     },
@@ -19,7 +19,7 @@
     },
     {
         "model": "llama3.1:8b-instruct-q4_K_M",
-        "scenario": "Simple_QKV",
+        "scenario": "Simple_QA",
         "tps": 32.56,
         "ttft": 0.045
     },
@@ -37,7 +37,7 @@
     },
     {
         "model": "hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:Q2_K",
-        "scenario": "Simple_QKV",
+        "scenario": "Simple_QA",
         "tps": 6.72,
         "ttft": 1.243
     },

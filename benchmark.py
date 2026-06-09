@@ -50,7 +50,7 @@ def main():
     context_text = load_context(report_txt)
 
     scenarios = {
-        "Simple_QKV": "Explain the difference and relation between QKV and KV Cache.",
+        "Simple_QA": "Explain the difference and relation between QKV and KV Cache.",
         "Coding_Logic": "Write a Python script for Tiled Matrix Multiplication using NumPy and Numba. Explain cache locality.",
         "Long_Context": f"{context_text}\n\nAct as a specialized Legal Compliance Officer. Using the provided text from Chapter 4 of the EU AI Act (Transparency Obligations), create a comprehensive summary and focus on interaction transparency, sensitive use cases and exceptions."
     }
