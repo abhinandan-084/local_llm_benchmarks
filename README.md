@@ -26,15 +26,7 @@ Ollama conservatively spills KV-cache layers into system RAM to avoid an OOM cra
 
 Each user request to a local LLM passes through two hardware-bound phases. Knowing which one is your bottleneck dictates which flags actually matter.
 
-```text
-            ┌─────────────┐      first token      ┌──────────────┐
-  prompt ─▶ │  PREFILL    │ ────────────────────▶ │   DECODE     │ ─▶ next token ─┐
-            │ compute-    │                        │ bandwidth-   │                │
-            │ bound (GPU  │      ┌───────────┐     │ bound (VRAM  │ ◀──────────────┘
-            │ tensor      │ ────▶│ KV CACHE  │◀───▶│ weight       │   auto-regressive
-            │ cores)      │ K,V  │ (VRAM)    │ K,V │ fetch)       │   loop
-            └─────────────┘      └───────────┘     └──────────────┘
-```
+![LLM Phases : Prefill and decode](assets/prefill_decode.png)
 
 - **Prefill** ingests the whole prompt in parallel and saturates the GPU's tensor cores. Throughput here scales with raw compute and with how large a micro-batch you can feed the GPU.
 - **Decode** generates one token at a time, fetching model weights from VRAM on every step. Tokens-per-second is governed by memory bandwidth, not FLOPs.
@@ -98,7 +90,9 @@ Run the full engine comparison across all models and scenarios:
 ./llama_cli.sh
 ```
 
-Reproduce a single tuning sweep with `llama-bench`. **CPU threads** — match `-t` to *physical* cores, not logical threads:
+Reproduce a single tuning sweep with `llama-bench`. 
+
+**CPU threads** — match `-t` to *physical* cores, not logical threads:
 
 ```bash
 ./build/bin/llama-bench \
